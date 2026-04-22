@@ -1,0 +1,319 @@
+<!-- ==================== Part 2: 推理优化技术 ==================== -->
+
+<!-- Slide 10: 优化全景图 -->
+<section class="divider-slide">
+    <h2>Part 2: 推理优化技术</h2>
+    <p>如何让推理更快、更便宜？</p>
+    <div style="display: flex; justify-content: center; gap: 2em; margin-top: 2em;">
+        <div style="background: rgba(255,255,255,0.1); padding: 1em 1.5em; border-radius: 12px; border-top: 3px solid #22d3ee;">
+            <strong>模型压缩</strong><br>
+            <span style="font-size: 0.8em;">量化 · 蒸馏 · 剪枝</span>
+        </div>
+        <div style="background: rgba(255,255,255,0.1); padding: 1em 1.5em; border-radius: 12px; border-top: 3px solid #a78bfa;">
+            <strong>算法加速</strong><br>
+            <span style="font-size: 0.8em;">推测解码</span>
+        </div>
+        <div style="background: rgba(255,255,255,0.1); padding: 1em 1.5em; border-radius: 12px; border-top: 3px solid #34d399;">
+            <strong>系统优化</strong><br>
+            <span style="font-size: 0.8em;">批处理 · 内存管理</span>
+        </div>
+    </div>
+    <aside class="notes">
+        Speaker B 开场接话："上一部分展示了 Decode 阶段深陷访存瓶颈。我们从三个角度来攻击这个问题：压缩模型让每次访存更便宜，用算法减少串行步数，用系统手段提高硬件利用率。"
+        这页只是路线图，快速过。
+    </aside>
+</section>
+
+<!-- Slide 11: 量化 -->
+<section>
+    <h2>量化：降低精度，加速推理</h2>
+    <span class="speaker-tag">Part 2</span>
+    <div class="two-col">
+        <div>
+            <h3>核心思想</h3>
+            <div class="formula-box">
+                $$\hat{w} = \text{round}(w / s) \times s$$
+                <p class="xsmall">\(s\) = 缩放因子（scale factor）</p>
+            </div>
+            <ul>
+                <li>FP16 → INT8：<strong>2× 显存缩减</strong>，2× 带宽提升</li>
+                <li>FP16 → INT4：<strong>4× 显存缩减</strong></li>
+                <li>Decode 是<strong>访存瓶颈</strong> → 减少字节数直接加速</li>
+            </ul>
+            <h3 style="margin-top: 0.4em;">量化误差</h3>
+            <p class="small">
+                \(\|\boldsymbol{W}\boldsymbol{x} - \hat{\boldsymbol{W}}\boldsymbol{x}\|\)：
+                并非所有权重同等重要——<strong>异常值通道</strong>导致不成比例的误差。
+            </p>
+        </div>
+        <div>
+            <h3>代表性方法</h3>
+            <div style="margin-bottom: 0.3em;">
+                <h3 style="color: #22d3ee; margin-top: 0.2em; margin-bottom: 0.1em;">GPTQ (Frantar et al., 2023)</h3>
+                <ul class="small">
+                    <li>逐层量化，最小化平方误差</li>
+                    <li>利用 <strong>Hessian 信息</strong>（二阶方法）决定量化顺序</li>
+                    <li>更重要的权重获得更精确的量化</li>
+                </ul>
+            </div>
+            <div>
+                <h3 style="color: #a78bfa; margin-top: 0.2em; margin-bottom: 0.1em;">AWQ (Lin et al., 2024)</h3>
+                <ul class="small">
+                    <li>激活感知：根据<strong>激活幅值</strong>保护关键通道</li>
+                    <li>大激活值对应的权重 → 用更高精度</li>
+                    <li>实测 INT4 与 FP16 质量差距极小</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <p class="ref">Frantar et al. "GPTQ" (2023) · Lin et al. "AWQ" (2024)</p>
+    <aside class="notes">
+        量化直接攻击 Part 1 提到的访存瓶颈：减少每个权重的字节数 → Decode 每个 token 需搬运的数据更少。
+        GPTQ 和 AWQ 是两种主流方法。GPTQ 用二阶信息（Hessian）来决定量化顺序，AWQ 通过观察激活值来保护关键通道。
+        关键信息：INT4 量化在很多 benchmark 上已经接近 FP16 的质量。
+    </aside>
+</section>
+
+<!-- Slide 12: 推测解码——思想 -->
+<section>
+    <h2>推测解码：用小模型加速大模型</h2>
+    <span class="speaker-tag">Part 2</span>
+    <div class="two-col">
+        <div>
+            <h3>核心思想</h3>
+            <ul>
+                <li><strong>草稿模型 \(M_q\)</strong>（小而快）：快速猜测 \(\gamma\) 个 token</li>
+                <li><strong>目标模型 \(M_p\)</strong>（大而准）：一次性并行验证全部候选</li>
+                <li>验证通过 → 接受；验证失败 → 从该位置重新采样</li>
+            </ul>
+            <div class="highlight-box" style="margin-top: 0.3em;">
+                关键洞察：\(M_p\) 验证 \(\gamma\) 个 token 的代价 ≈ 生成 1 个 token（类似 Prefill）
+            </div>
+        </div>
+        <div>
+            <h3>流程示意</h3>
+            <div class="diagram-container">
+                <svg viewBox="0 0 460 240" xmlns="http://www.w3.org/2000/svg" style="width:100%;">
+                    <!-- 泳道背景 -->
+                    <rect x="10" y="20" width="440" height="80" rx="6" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1"/>
+                    <rect x="10" y="120" width="440" height="80" rx="6" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1"/>
+                    <!-- 泳道标签 -->
+                    <text x="20" y="40" font-size="11" font-weight="700" fill="#2563eb">M_q 草稿</text>
+                    <text x="20" y="140" font-size="11" font-weight="700" fill="#16a34a">M_p 验证</text>
+                    <!-- Draft tokens -->
+                    <rect x="90" y="48" width="44" height="32" rx="4" fill="#2563eb" opacity="0.15" stroke="#2563eb" stroke-width="1.5"/>
+                    <text x="112" y="69" text-anchor="middle" font-size="12" fill="#1e40af">x₁</text>
+                    <rect x="155" y="48" width="44" height="32" rx="4" fill="#2563eb" opacity="0.15" stroke="#2563eb" stroke-width="1.5"/>
+                    <text x="177" y="69" text-anchor="middle" font-size="12" fill="#1e40af">x₂</text>
+                    <rect x="220" y="48" width="44" height="32" rx="4" fill="#2563eb" opacity="0.15" stroke="#2563eb" stroke-width="1.5"/>
+                    <text x="242" y="69" text-anchor="middle" font-size="12" fill="#1e40af">x₃</text>
+                    <rect x="285" y="48" width="44" height="32" rx="4" fill="#2563eb" opacity="0.15" stroke="#2563eb" stroke-width="1.5"/>
+                    <text x="307" y="69" text-anchor="middle" font-size="12" fill="#1e40af">x₄</text>
+                    <rect x="350" y="48" width="44" height="32" rx="4" fill="#2563eb" opacity="0.15" stroke="#2563eb" stroke-width="1.5"/>
+                    <text x="372" y="69" text-anchor="middle" font-size="12" fill="#1e40af">x₅</text>
+                    <!-- Draft 箭头 -->
+                    <path d="M134,64 L155,64" stroke="#2563eb" stroke-width="1" marker-end="url(#arrowBlue)"/>
+                    <path d="M199,64 L220,64" stroke="#2563eb" stroke-width="1" marker-end="url(#arrowBlue)"/>
+                    <path d="M264,64 L285,64" stroke="#2563eb" stroke-width="1" marker-end="url(#arrowBlue)"/>
+                    <path d="M329,64 L350,64" stroke="#2563eb" stroke-width="1" marker-end="url(#arrowBlue)"/>
+                    <!-- Batch 验证大箭头 -->
+                    <path d="M242,88 L242,118" stroke="#64748b" stroke-width="2" marker-end="url(#arrowGrey)"/>
+                    <text x="260" y="108" font-size="9" fill="#64748b">batch 验证</text>
+                    <!-- Verify tokens -->
+                    <rect x="90" y="148" width="44" height="32" rx="4" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+                    <text x="108" y="169" text-anchor="middle" font-size="12" fill="#166534">x₁</text>
+                    <text x="126" y="168" font-size="14" fill="#16a34a">✓</text>
+                    <rect x="155" y="148" width="44" height="32" rx="4" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+                    <text x="173" y="169" text-anchor="middle" font-size="12" fill="#166534">x₂</text>
+                    <text x="191" y="168" font-size="14" fill="#16a34a">✓</text>
+                    <rect x="220" y="148" width="44" height="32" rx="4" fill="#fef2f2" stroke="#dc2626" stroke-width="1.5"/>
+                    <text x="238" y="169" text-anchor="middle" font-size="12" fill="#991b1b">x₃</text>
+                    <text x="256" y="168" font-size="14" fill="#dc2626">✗</text>
+                    <rect x="285" y="148" width="44" height="32" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+                    <text x="307" y="169" text-anchor="middle" font-size="12" fill="#94a3b8">x₄</text>
+                    <rect x="350" y="148" width="44" height="32" rx="4" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,2"/>
+                    <text x="372" y="169" text-anchor="middle" font-size="12" fill="#94a3b8">x₅</text>
+                    <!-- 重采样箭头 -->
+                    <path d="M242,182 Q242,218 280,218 Q370,218 420,200" stroke="#dc2626" stroke-width="1.5" fill="none" stroke-dasharray="4,2"/>
+                    <text x="330" y="230" font-size="10" fill="#dc2626">重采样 x₃'</text>
+                    <!-- 丢弃标注 -->
+                    <text x="330" y="198" font-size="9" fill="#94a3b8">丢弃</text>
+                    <!-- Arrow markers -->
+                    <defs>
+                        <marker id="arrowBlue" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+                            <path d="M0,0 L6,2 L0,4" fill="#2563eb"/>
+                        </marker>
+                        <marker id="arrowGrey" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+                            <path d="M0,0 L6,2 L0,4" fill="#64748b"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+            <p class="small" style="margin-top: 0.3em;">
+                一次迭代 = \(\gamma\) 次快速串行 + 1 次并行验证<br>
+                若接受率高 → <strong>一轮得到多个 token</strong>
+            </p>
+        </div>
+    </div>
+    <p class="ref">Leviathan et al. (2023) · Chen et al. (2023)</p>
+    <aside class="notes">
+        推测解码的直觉：大模型贵但能并行验证，小模型便宜但必须串行。
+        我们用小模型的串行速度来生成候选，再用大模型的并行能力来一次性验证。
+        为什么并行验证便宜？因为这和 Prefill 一样是 GEMM 运算——矩阵乘矩阵，算术强度高。
+        下一页我们证明这个方法是精确的——输出分布与直接从 M_p 采样完全一致。
+    </aside>
+</section>
+
+<!-- Slide 13: 推测解码——正确性证明 -->
+<section>
+    <h2>推测解码的正确性证明</h2>
+    <span class="speaker-tag">Part 2</span>
+    <div class="two-col">
+        <div>
+            <h3>修改拒绝采样</h3>
+            <p class="small">对每个草稿 token \(x \sim q(x)\)：</p>
+            <div class="formula-box">
+                接受概率：$\alpha(x) = \min\!\left(1,\; \frac{p(x)}{q(x)}\right)$
+            </div>
+            <p class="small">若拒绝，从调整分布重采样：</p>
+            <div class="formula-box">
+                $$p'(x) = \frac{\max\big(0,\; p(x) - q(x)\big)}{Z}$$
+                <p class="xsmall">\(Z = \sum_x \max(0, p(x) - q(x))\)</p>
+            </div>
+        </div>
+        <div>
+            <h3>证明 \(P(\text{output} = x) = p(x)\)</h3>
+            <div style="font-size: 0.82em; line-height: 1.7;">
+                <p><strong>情况 1</strong>：\(p(x) \leq q(x)\)</p>
+                <p>\(P = q(x) \cdot \frac{p(x)}{q(x)} + Z \cdot 0 = p(x)\) ✓</p>
+                <p style="margin-top: 0.8em;"><strong>情况 2</strong>：\(p(x) > q(x)\)</p>
+                <p>\(P = q(x) \cdot 1 + Z \cdot \frac{p(x)-q(x)}{Z} = p(x)\) ✓</p>
+            </div>
+            <div class="highlight-box" style="margin-top: 0.3em;">
+                <strong>两种情况均得到 \(p(x)\)</strong>。<br>
+                推测解码<strong>精确</strong>恢复目标分布——零近似误差。
+            </div>
+        </div>
+    </div>
+    <aside class="notes">
+        这是 Part 2 的数学亮点。慢慢推导：
+        输出概率 = 直接接受的概率 + 被拒绝后从调整分布采样到 x 的概率。
+        情况 1：p(x) ≤ q(x)，接受概率是 p/q，乘以 q 得 p。调整分布中 p'(x)=0 因为 p-q≤0。
+        情况 2：p(x) > q(x)，接受概率是 1，直接贡献 q(x)。调整分布贡献 (p-q)。合计 q+(p-q)=p。
+        两种情况都精确等于 p(x)。证毕。
+        问同学：如果 M_q = M_p 会怎样？（接受率 100%，但没有加速）。如果 M_q 很差？（接受率趋近 0，但至少不比普通解码差）。
+    </aside>
+</section>
+
+<!-- Slide 14: 推测解码——加速分析 -->
+<section>
+    <h2>推测解码的加速分析</h2>
+    <span class="speaker-tag">Part 2</span>
+    <div class="two-col">
+        <div>
+            <h3>期望 token 数</h3>
+            <p class="small">设平均接受率为 \(\alpha\)，草稿长度 \(\gamma\)：</p>
+            <div class="formula-box">
+                $$E[\text{tokens/iter}] = \frac{1 - \alpha^{\gamma+1}}{1 - \alpha}$$
+            </div>
+            <p class="small">当 \(\alpha \to 1\)：趋近 \(\gamma + 1\)（全部接受）</p>
+            <p class="small">当 \(\alpha \to 0\)：趋近 1（每次只得 1 个 token）</p>
+
+            <h3 style="margin-top: 0.4em;">加速比</h3>
+            <div class="formula-box">
+                $$S = \frac{E[\text{tokens/iter}]}{\gamma \cdot c + 1}$$
+                <p class="xsmall">\(c = T_{M_q} / T_{M_p}\)（草稿模型与目标模型的时间比）</p>
+            </div>
+        </div>
+        <div>
+            <h3>关键因素</h3>
+            <table>
+                <tr><th>因素</th><th>影响</th></tr>
+                <tr><td>接受率 \(\alpha\) ↑</td><td>每轮更多 token → 加速 ↑</td></tr>
+                <tr><td>时间比 \(c\) ↓</td><td>草稿开销更小 → 加速 ↑</td></tr>
+                <tr><td>草稿长度 \(\gamma\)</td><td>存在最优值（过大 → 浪费）</td></tr>
+            </table>
+            <div class="highlight-box" style="margin-top: 0.3em;">
+                <strong>实际效果</strong>：2–3× 加速<br>
+                草稿模型通常比目标模型小 10–100×<br>
+                接受率随领域匹配度而变化
+            </div>
+        </div>
+    </div>
+    <aside class="notes">
+        期望 token 数是一个几何级数求和。直觉：前 k 个都接受的概率是 α^k，所以期望接受数 = Σα^k。
+        加速比要考虑草稿模型的开销：γ 步草稿的时间 + 1 步验证的时间。
+        最优 γ 取决于 α 和 c——有一个 sweet spot。实际中 γ 通常取 4-8。
+        补充：即使在最坏情况下（α≈0），推测解码也不会比普通解码慢太多（只多了一点草稿模型的开销）。
+    </aside>
+</section>
+
+<!-- Slide 15: 系统级优化 -->
+<section>
+    <h2>系统级优化：批处理与内存管理</h2>
+    <span class="speaker-tag">Part 2</span>
+    <div class="two-col">
+        <div>
+            <h3>Continuous Batching</h3>
+            <p class="small" style="color: var(--text-muted);">Yu et al. "Orca" (2022)</p>
+            <ul>
+                <li><strong>静态批处理</strong>：一批请求全部完成才处理下一批 → padding 浪费</li>
+                <li><strong>连续批处理</strong>：请求完成即退出，新请求即刻加入</li>
+                <li>迭代级调度：每个 Decode 步的活跃请求可以不同</li>
+                <li>效果：<strong>2–5× 吞吐量提升</strong></li>
+            </ul>
+        </div>
+        <div>
+            <h3>PagedAttention</h3>
+            <p class="small" style="color: var(--text-muted);">Kwon et al. "vLLM" (2023)</p>
+            <ul>
+                <li><strong>问题</strong>：KV Cache 连续分配 → 碎片化、显存浪费</li>
+                <li><strong>灵感</strong>：操作系统的虚拟内存 + 分页</li>
+                <li>KV Cache 切分为固定大小的<strong>页</strong>（如 16 tokens/页）</li>
+                <li>页表映射逻辑位置 → 物理显存块，按需分配，支持 CoW 共享前缀</li>
+                <li>效果：近零碎片，<strong>2–4× 并发提升</strong></li>
+            </ul>
+        </div>
+    </div>
+    <img src="assets/sys-optimization-concept.jpg" class="slide-figure" alt="Continuous Batching 与 PagedAttention 示意图" style="max-height: 200px;">
+    <div class="highlight-box" style="margin-top: 0.2em; text-align: center; padding: 0.3em 0.8em;">
+        OS 虚拟内存思想 → 直接迁移到 GPU 显存管理
+    </div>
+    <p class="ref">Yu et al. "Orca" (2022) · Kwon et al. "vLLM" (2023)</p>
+    <aside class="notes">
+        两个系统级优化，CS 学生应该觉得亲切：
+        Continuous Batching 类似于 OS 的抢占式调度——不再等所有任务完成才切换。
+        PagedAttention 就是 GPU 显存上的虚拟内存。之前 KV Cache 像早期 OS 的连续分配，现在变成分页式。
+        学过 OS 的同学应该立刻理解为什么这能解决碎片化问题。Copy-on-Write 也是一样的思想——共享 prompt 前缀时不重复存储。
+    </aside>
+</section>
+
+<!-- Slide 16: 小结 + 转折 -->
+<section>
+    <h2>从"减少计算"到"增加计算"</h2>
+    <span class="speaker-tag">Part 2</span>
+    <div style="text-align: left; max-width: 95%; margin: 0 auto;">
+        <h3>Part 2 回顾</h3>
+        <table style="margin-bottom: 0.5em;">
+            <tr><th>技术</th><th>核心思路</th><th>攻击的瓶颈</th></tr>
+            <tr><td>量化</td><td>减少每个权重的字节数</td><td>访存带宽</td></tr>
+            <tr><td>推测解码</td><td>一次验证多个 token</td><td>串行步数</td></tr>
+            <tr><td>连续批处理</td><td>消除 padding 浪费</td><td>硬件利用率</td></tr>
+            <tr><td>PagedAttention</td><td>分页管理 KV Cache</td><td>显存碎片</td></tr>
+        </table>
+        <div class="highlight-box" style="font-size: 1.0em; text-align: center;">
+            以上所有技术的共同目标：<strong>让推理更快、更便宜</strong>。<br><br>
+            但如果反过来——<strong>故意花更多推理计算</strong>，<br>
+            能否让模型给出更好的答案？
+        </div>
+        <p class="small" style="margin-top: 0.3em; text-align: center; color: var(--primary);">
+            Snell et al. (2024) 发现：小模型 + 最优推理计算 > <strong>14× 大模型</strong>在相同 FLOPs 下的表现
+        </p>
+    </div>
+    <aside class="notes">
+        这是关键转折点。前面所有技术都在做减法——减少计算、减少显存、减少延迟。
+        现在抛出一个反直觉的问题：如果我们故意增加推理计算，会怎样？
+        Snell et al. 2024 的预告结果：一个小模型如果被允许在推理时使用足够多的计算（思考更多步），可以超过 14 倍大的模型。
+        交接线："我一直在讲如何减少推理计算。[Speaker C] 会翻转这个问题——展示为什么有时增加推理计算反而是更好的选择。这就是 Inference-Time Scaling。"
+    </aside>
+</section>

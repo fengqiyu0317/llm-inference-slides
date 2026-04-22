@@ -1,0 +1,428 @@
+<!-- ==================== Part 1: 大模型推理基础 ==================== -->
+
+<!-- Slide 1: 标题与动机 -->
+<section>
+    <h1>大模型推理 & Inference-Time Scaling</h1>
+    <p style="font-size:1.1em; color: var(--text-muted);">《大语言模型》课程讲座</p>
+    <div style="margin-top: 1.2em; font-size: 0.85em;">
+        <p><strong>Part 1</strong> 推理为什么昂贵？ · <strong>Part 2</strong> 如何让推理更快？ · <strong>Part 3</strong> 花更多计算反而更好？</p>
+    </div>
+    <div class="highlight-box" style="margin-top: 0.8em; text-align: left;">
+        <strong>一个事实：</strong>推理（Inference）占生产环境中 ML 总计算量的 90% 以上。<br>
+        训练花费数百万美元、做一次；推理每天执行数十亿次。
+    </div>
+    <aside class="notes">
+        开场先抛出一个数据：推理在生产环境中的计算占比远超训练。这就是我们今天要讨论的核心问题。
+        简要介绍三部分结构：Part 1 理解推理机制和瓶颈，Part 2 优化推理效率，Part 3 反过来——故意增加推理计算以获得更好结果。
+    </aside>
+</section>
+
+<!-- Slide 2: 从序列建模到 Attention -->
+<section>
+    <h2>从序列建模到 Attention</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="two-col">
+        <div>
+            <h3>RNN 的瓶颈</h3>
+            <ul>
+                <li>隐状态 \(h_t = f(h_{t-1}, x_t)\) 必须<strong>顺序计算</strong></li>
+                <li>长距离依赖：梯度消失/爆炸</li>
+                <li>信息瓶颈：所有历史压缩到固定维度 \(h_t\)</li>
+            </ul>
+            <h3 style="margin-top: 0.4em;">Attention 的核心思想</h3>
+            <ul>
+                <li>每个位置<strong>直接</strong>访问所有其他位置</li>
+                <li>用"查询-键"匹配决定关注哪里</li>
+                <li>不再受限于固定维度的瓶颈</li>
+            </ul>
+        </div>
+        <div>
+            <h3>Q / K / V 直觉</h3>
+            <div class="highlight-box">
+                <p><strong>Query (Q)</strong>："我在找什么？"</p>
+                <p><strong>Key (K)</strong>："我有什么信息？"</p>
+                <p><strong>Value (V)</strong>："我的具体内容是什么？"</p>
+            </div>
+            <p class="small" style="margin-top: 0.3em;">
+                类比图书馆：<br>
+                Q = 你的搜索词<br>
+                K = 每本书的索引标签<br>
+                V = 书的内容<br>
+                Q·K 匹配度越高 → 越多地"阅读"该书的 V
+            </p>
+        </div>
+    </div>
+    <aside class="notes">
+        这页帮助没学过 Transformer 的同学建立直觉。RNN 有两个根本问题：顺序计算无法并行，以及信息瓶颈。
+        Attention 机制通过让每个位置直接看到所有其他位置来解决这些问题。
+        Q/K/V 的图书馆类比很直观：Query 是你的搜索词，Key 是索引，Value 是内容。
+    </aside>
+</section>
+
+<!-- Slide 3: Self-Attention 机制 -->
+<section>
+    <h2>Self-Attention 机制</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="formula-box">
+        $$\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V$$
+    </div>
+    <div class="two-col" style="margin-top: 0.3em;">
+        <div>
+            <h3>计算步骤</h3>
+            <ol>
+                <li>\(QK^\top\)：计算所有 token 对之间的相似度</li>
+                <li>\(\div \sqrt{d_k}\)：缩放防止 softmax 饱和</li>
+                <li>softmax：归一化为注意力权重（概率分布）</li>
+                <li>乘以 \(V\)：加权汇聚信息</li>
+            </ol>
+        </div>
+        <div>
+            <h3>Multi-Head Attention</h3>
+            <p class="small">多组独立的 Q/K/V 投影 → 捕获不同类型的关系</p>
+            <div class="formula-box" style="font-size: 0.85em;">
+                $$\text{head}_i = \text{Attention}(QW_i^Q, KW_i^K, VW_i^V)$$
+                $$\text{MHA} = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W^O$$
+            </div>
+            <p class="small">
+                典型配置：\(h = 32\), \(d_k = d_{\text{model}} / h = 128\)
+            </p>
+        </div>
+    </div>
+    <aside class="notes">
+        Self-Attention 的核心公式。强调 sqrt(d_k) 的缩放是为了控制点积的方差，防止 softmax 输出变得极端（接近 one-hot）。
+        Multi-Head 让模型在不同子空间中并行学习不同类型的依赖关系。
+        提一下典型的维度：d_model=4096, h=32, d_k=128。
+    </aside>
+</section>
+
+<!-- Slide 4: 自回归生成框架 -->
+<section>
+    <h2>自回归生成</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="formula-box">
+        $$P(x_{1:T}) = \prod_{t=1}^{T} P(x_t \mid x_{&lt;t})$$
+    </div>
+    <div class="diagram-container" style="margin: 0.2em 0;">
+        <svg viewBox="0 0 560 100" xmlns="http://www.w3.org/2000/svg" style="width:100%; max-width:900px;">
+            <!-- Training side -->
+            <text x="120" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#2563eb">训练：1 次前向传播（并行）</text>
+            <rect x="20" y="24" width="44" height="28" rx="4" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="42" y="43" text-anchor="middle" font-size="11" fill="#1e40af">x₁</text>
+            <rect x="72" y="24" width="44" height="28" rx="4" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="94" y="43" text-anchor="middle" font-size="11" fill="#1e40af">x₂</text>
+            <rect x="124" y="24" width="44" height="28" rx="4" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="146" y="43" text-anchor="middle" font-size="11" fill="#1e40af">x₃</text>
+            <rect x="176" y="24" width="44" height="28" rx="4" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="198" y="43" text-anchor="middle" font-size="11" fill="#1e40af">x₄</text>
+            <!-- 同时处理大括号 -->
+            <path d="M20,58 L20,65 L220,65 L220,58" stroke="#2563eb" stroke-width="1.2" fill="none"/>
+            <text x="120" y="80" text-anchor="middle" font-size="10" fill="#2563eb">同时处理所有 token</text>
+            <!-- 分隔线 -->
+            <line x1="270" y1="10" x2="270" y2="95" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4,3"/>
+            <!-- Inference side -->
+            <text x="410" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="#f59e0b">推理：T 次前向传播（串行）</text>
+            <rect x="300" y="24" width="44" height="28" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="322" y="43" text-anchor="middle" font-size="11" fill="#92400e">x₁</text>
+            <path d="M344,38 L356,38" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#arwO)"/>
+            <rect x="356" y="24" width="44" height="28" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="378" y="43" text-anchor="middle" font-size="11" fill="#92400e">x₂</text>
+            <path d="M400,38 L412,38" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#arwO)"/>
+            <rect x="412" y="24" width="44" height="28" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="434" y="43" text-anchor="middle" font-size="11" fill="#92400e">x₃</text>
+            <path d="M456,38 L468,38" stroke="#f59e0b" stroke-width="1.5" fill="none" marker-end="url(#arwO)"/>
+            <rect x="468" y="24" width="44" height="28" rx="4" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+            <text x="490" y="43" text-anchor="middle" font-size="11" fill="#92400e">x₄</text>
+            <!-- 逐个标注 -->
+            <text x="322" y="72" text-anchor="middle" font-size="9" fill="#92400e">step 1</text>
+            <text x="378" y="72" text-anchor="middle" font-size="9" fill="#92400e">step 2</text>
+            <text x="434" y="72" text-anchor="middle" font-size="9" fill="#92400e">step 3</text>
+            <text x="490" y="72" text-anchor="middle" font-size="9" fill="#92400e">step 4</text>
+            <text x="410" y="90" text-anchor="middle" font-size="10" fill="#92400e">每步依赖前一步的输出</text>
+            <defs>
+                <marker id="arwO" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+                    <path d="M0,0 L6,2 L0,4" fill="#f59e0b"/>
+                </marker>
+            </defs>
+        </svg>
+    </div>
+    <div class="two-col" style="margin-top: 0.2em;">
+        <div>
+            <h3>训练 vs 推理</h3>
+            <table>
+                <tr><th></th><th>训练</th><th>推理</th></tr>
+                <tr><td>输入</td><td>完整序列</td><td>逐 token 生成</td></tr>
+                <tr><td>并行度</td><td>所有 token 并行（Teacher Forcing）</td><td>严格串行</td></tr>
+                <tr><td>前向传播</td><td>1 次</td><td>\(T\) 次</td></tr>
+            </table>
+        </div>
+        <div>
+            <h3>关键瓶颈</h3>
+            <div class="highlight-box">
+                生成 \(T\) 个 token 需要 <strong>\(T\) 次前向传播</strong>。<br>
+                每次只产出 1 个 token，但需访问所有历史信息 → 计算效率极低。
+            </div>
+            <p class="small" style="margin-top: 0.5em;">
+                词表大小 \(|V| \sim\) 32K–128K：每步在整个词表上计算概率分布。
+            </p>
+        </div>
+    </div>
+    <aside class="notes">
+        自回归分解是 LLM 推理的数学基础。训练时因为有 teacher forcing 和因果掩码，可以并行处理所有 token。
+        但推理时必须一个一个生成——因为 x_t 依赖 x_{t-1}，而 x_{t-1} 又依赖 x_{t-2}……
+        问同学们：生成 1000 个 token 需要多少次前向传播？答案：1000 次。这就是推理慢的根本原因。
+    </aside>
+</section>
+
+<!-- Slide 5: KV Cache -->
+<section>
+    <h2>KV Cache：用空间换时间</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="two-col">
+        <div>
+            <h3 style="margin-top: 0.4em;">为什么能缓存？</h3>
+            <ul>
+                <li><strong>因果掩码</strong>：token \(t\) 只看位置 \(1, \dots, t\)</li>
+                <li>因此 \(K_i, V_i\)（\(i &lt; t\)）在生成 token \(t\) 时<strong>不会改变</strong></li>
+                <li>缓存已计算的 K、V → 每步只需计算新 token 的 \(Q_t, K_t, V_t\)</li>
+            </ul>
+            <h3 style="margin-top: 0.4em;">复杂度对比</h3>
+            <table>
+                <tr><th></th><th>无 KV Cache</th><th>有 KV Cache</th></tr>
+                <tr><td>第 \(t\) 步</td><td>\(O(t \cdot d)\)</td><td>\(O(d)\) 计算 + \(O(t \cdot d)\) 读取</td></tr>
+                <tr><td>总计</td><td>\(O(T^2 \cdot d)\) 重复计算</td><td>\(O(T \cdot d)\) 计算</td></tr>
+            </table>
+        </div>
+        <div>
+            <div class="diagram-container" style="margin-bottom: 0.2em;">
+                <svg viewBox="0 0 420 130" xmlns="http://www.w3.org/2000/svg" style="width:100%; max-height:110px;">
+                    <!-- 时间步标签 -->
+                    <text x="62" y="14" text-anchor="middle" font-size="10" fill="#64748b">t=1</text>
+                    <text x="132" y="14" text-anchor="middle" font-size="10" fill="#64748b">t=2</text>
+                    <text x="202" y="14" text-anchor="middle" font-size="10" fill="#64748b">t=3</text>
+                    <text x="280" y="14" text-anchor="middle" font-size="9" fill="#64748b">…</text>
+                    <text x="342" y="14" text-anchor="middle" font-size="10" fill="#f59e0b" font-weight="700">t (当前)</text>
+                    <!-- 缓存区域背景 -->
+                    <rect x="20" y="20" width="235" height="90" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3"/>
+                    <text x="137" y="122" text-anchor="middle" font-size="9" fill="#94a3b8">已缓存 (cached)</text>
+                    <!-- K blocks -->
+                    <rect x="40" y="28" width="44" height="22" rx="3" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+                    <text x="62" y="43" text-anchor="middle" font-size="10" fill="#1e40af">K₁</text>
+                    <rect x="110" y="28" width="44" height="22" rx="3" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+                    <text x="132" y="43" text-anchor="middle" font-size="10" fill="#1e40af">K₂</text>
+                    <rect x="180" y="28" width="44" height="22" rx="3" fill="#dbeafe" stroke="#2563eb" stroke-width="1"/>
+                    <text x="202" y="43" text-anchor="middle" font-size="10" fill="#1e40af">K₃</text>
+                    <!-- V blocks -->
+                    <rect x="40" y="58" width="44" height="22" rx="3" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+                    <text x="62" y="73" text-anchor="middle" font-size="10" fill="#92400e">V₁</text>
+                    <rect x="110" y="58" width="44" height="22" rx="3" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+                    <text x="132" y="73" text-anchor="middle" font-size="10" fill="#92400e">V₂</text>
+                    <rect x="180" y="58" width="44" height="22" rx="3" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+                    <text x="202" y="73" text-anchor="middle" font-size="10" fill="#92400e">V₃</text>
+                    <!-- 省略号 -->
+                    <text x="262" y="43" font-size="14" fill="#94a3b8">…</text>
+                    <text x="262" y="73" font-size="14" fill="#94a3b8">…</text>
+                    <!-- 当前步 (高亮) -->
+                    <rect x="300" y="22" width="50" height="28" rx="4" fill="#2563eb" stroke="#1e40af" stroke-width="2"/>
+                    <text x="325" y="41" text-anchor="middle" font-size="11" fill="white" font-weight="700">K_t</text>
+                    <rect x="300" y="52" width="50" height="28" rx="4" fill="#f59e0b" stroke="#92400e" stroke-width="2"/>
+                    <text x="325" y="71" text-anchor="middle" font-size="11" fill="white" font-weight="700">V_t</text>
+                    <!-- Q_t -->
+                    <rect x="370" y="37" width="40" height="22" rx="4" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+                    <text x="390" y="52" text-anchor="middle" font-size="10" fill="#166534" font-weight="700">Q_t</text>
+                    <!-- Q_t 注意力箭头 -->
+                    <path d="M370,48 Q310,95 62,90" stroke="#16a34a" stroke-width="1" fill="none" stroke-dasharray="3,2" opacity="0.6"/>
+                    <text x="200" y="102" font-size="8" fill="#16a34a">Attention over all K</text>
+                    <text x="375" y="22" font-size="9" fill="#16a34a" font-weight="600">新计算</text>
+                </svg>
+            </div>
+            <div class="formula-box" style="padding:0.3em 0.6em; margin:0.3em 0; font-size:0.82em;">
+                <strong>显存：</strong>\(\text{KV} = 2 \times L \times d \times s \times b \times p\)
+                <span class="xsmall">（\(L\)=层数, \(d\)=维度, \(s\)=序列长, \(b\)=批大小, \(p\)=精度字节）</span><br>
+                <strong>70B 实例：</strong>\(L{=}80, d{=}8192, s{=}4096, b{=}1, p{=}2\) → <strong>~10 GB/序列</strong>；100 并发 → 1 TB！
+            </div>
+        </div>
+    </div>
+    <aside class="notes">
+        KV Cache 是 LLM 推理最重要的数据结构。因果掩码保证了之前 token 的 K、V 不会因为新 token 而改变，所以可以安全缓存。
+        在白板上算一下具体数字：70B 模型的单序列 KV Cache 约 10GB。问同学们：如果要服务 100 个并发用户怎么办？
+        这就是为什么内存管理如此重要——这为 Part 2 的 PagedAttention 做铺垫。
+    </aside>
+</section>
+
+<!-- Slide 6: Prefill vs Decode -->
+<section style="font-size: 0.95em;">
+    <h2>两阶段推理：Prefill 与 Decode</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="two-col">
+        <div>
+            <h3>Prefill（预填充）</h3>
+            <ul>
+                <li>处理完整输入 prompt，<strong>并行</strong></li>
+                <li>操作：矩阵-矩阵乘（GEMM）</li>
+                <li>\(W \times X\)，其中 \(X \in \mathbb{R}^{d \times n_{\text{prompt}}}\)</li>
+                <li>算术强度 \(\sim O(d)\) → <strong>计算瓶颈</strong></li>
+                <li>GPU 利用率高</li>
+            </ul>
+        </div>
+        <div>
+            <h3>Decode（解码）</h3>
+            <ul>
+                <li>逐 token 生成，<strong>串行</strong></li>
+                <li>操作：矩阵-向量乘（GEMV）</li>
+                <li>\(W \times x_t\)，其中 \(x_t \in \mathbb{R}^{d \times 1}\)</li>
+                <li>算术强度 \(\sim O(1)\) → <strong>访存瓶颈</strong></li>
+                <li>GPU 利用率极低</li>
+            </ul>
+        </div>
+    </div>
+    <table style="margin-top: 0.3em;">
+        <tr><th></th><th>Prefill</th><th>Decode</th></tr>
+        <tr><td>运算类型</td><td>GEMM（矩阵×矩阵）</td><td>GEMV（矩阵×向量）</td></tr>
+        <tr><td>瓶颈</td><td>算力（Compute）</td><td>带宽（Memory BW）</td></tr>
+        <tr><td>批维度</td><td>\(n_{\text{prompt}}\)（大）</td><td>1（单 token）</td></tr>
+        <tr><td>延迟指标</td><td>TTFT</td><td>TBT</td></tr>
+    </table>
+    <aside class="notes">
+        这是 Part 1 最关键的系统洞察。Prefill 类似训练——大矩阵乘，GPU 利用率高。
+        Decode 则完全不同——每次只处理一个 token 的向量，必须加载全部模型权重但只做一次乘法。
+        70B FP16 模型 → 140GB 权重。A100 带宽 2TB/s → 每个 token 至少 70ms，无论算力多强。
+        这就是为什么 Decode 是"访存瓶颈"而非"计算瓶颈"。
+    </aside>
+</section>
+
+<!-- Slide 7: Roofline 模型 -->
+<section>
+    <h2>Roofline 模型：量化推理瓶颈</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="formula-box">
+        $$\text{可达性能} = \min\!\big(\text{峰值算力},\ \text{峰值带宽} \times I\big), \quad I = \frac{\text{FLOPs}}{\text{Bytes}}$$
+    </div>
+    <div class="two-col" style="margin-top: 0.3em;">
+        <div>
+            <h3>算术强度分析</h3>
+            <ul>
+                <li><strong>GEMM</strong>（Prefill）：\(I \approx O(d)\) → 远高于平衡点</li>
+                <li><strong>GEMV</strong>（Decode）：\(I \approx O(1)\) → 远低于平衡点</li>
+            </ul>
+            <h3 style="margin-top: 0.3em;">A100 参数</h3>
+            <table>
+                <tr><td>峰值算力</td><td>312 TFLOPS (FP16)</td></tr>
+                <tr><td>HBM 带宽</td><td>2 TB/s</td></tr>
+                <tr><td>平衡点</td><td>~156 FLOPs/byte</td></tr>
+            </table>
+        </div>
+        <div class="diagram-container">
+            <svg viewBox="0 0 480 310" xmlns="http://www.w3.org/2000/svg" style="width:100%; max-height:240px;">
+                <!-- 背景区域 -->
+                <polygon points="60,280 60,65 235,65 235,280" fill="#fef3c7" opacity="0.3"/>
+                <polygon points="235,280 235,65 460,65 460,280" fill="#dbeafe" opacity="0.3"/>
+                <!-- 区域标签 -->
+                <text x="140" y="295" text-anchor="middle" font-size="10" fill="#92400e" opacity="0.7">访存瓶颈区</text>
+                <text x="350" y="295" text-anchor="middle" font-size="10" fill="#1e40af" opacity="0.7">算力瓶颈区</text>
+                <!-- 坐标轴 -->
+                <line x1="60" y1="280" x2="460" y2="280" stroke="#1e293b" stroke-width="1.5"/>
+                <line x1="60" y1="280" x2="60" y2="30" stroke="#1e293b" stroke-width="1.5"/>
+                <polygon points="460,280 454,276 454,284" fill="#1e293b"/>
+                <polygon points="60,30 56,36 64,36" fill="#1e293b"/>
+                <!-- 轴标签 -->
+                <text x="260" y="308" text-anchor="middle" font-size="11" fill="#64748b">算术强度 (FLOPs/Byte) →</text>
+                <text x="18" y="155" text-anchor="middle" font-size="11" fill="#64748b" transform="rotate(-90,18,155)">可达性能 (TFLOPS) →</text>
+                <!-- Roofline 线 -->
+                <line x1="60" y1="280" x2="235" y2="65" stroke="#f59e0b" stroke-width="2.5"/>
+                <line x1="235" y1="65" x2="460" y2="65" stroke="#2563eb" stroke-width="2.5"/>
+                <!-- 带宽标注 -->
+                <text x="125" y="185" font-size="10" fill="#92400e" transform="rotate(-51,125,185)">2 TB/s 带宽</text>
+                <!-- 算力标注 -->
+                <text x="350" y="57" font-size="10" fill="#1e40af">312 TFLOPS (FP16)</text>
+                <!-- 平衡点虚线 -->
+                <line x1="235" y1="65" x2="235" y2="280" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3"/>
+                <text x="235" y="273" text-anchor="middle" font-size="9" fill="#64748b">~156</text>
+                <!-- Decode 点 -->
+                <circle cx="100" cy="220" r="8" fill="#f59e0b" stroke="#92400e" stroke-width="1.5"/>
+                <text x="115" y="216" font-size="12" font-weight="700" fill="#92400e">Decode</text>
+                <text x="115" y="230" font-size="9" fill="#92400e">(GEMV, I≈1)</text>
+                <!-- Prefill 点 -->
+                <circle cx="380" cy="72" r="8" fill="#2563eb" stroke="#1e40af" stroke-width="1.5"/>
+                <text x="395" y="68" font-size="12" font-weight="700" fill="#1e40af">Prefill</text>
+                <text x="395" y="82" font-size="9" fill="#1e40af">(GEMM, I≈d)</text>
+            </svg>
+            <p class="xsmall" style="margin-top: 0.1em;">Decode 阶段 GPU 算力严重闲置，受限于显存带宽下界</p>
+        </div>
+    </div>
+    <aside class="notes">
+        Roofline 模型把之前的定性分析变成定量。平衡点是峰值算力/峰值带宽。
+        Prefill 的算术强度远超平衡点 → 计算受限。Decode 的算术强度约为 1 → 深陷访存区。
+        如果能展示一个 Roofline 图最好，横轴是算术强度，纵轴是可达性能，Prefill 在右上，Decode 在左下。
+        关键信息：Decode 阶段 GPU 的绝大部分算力都在闲置等待数据搬运。
+    </aside>
+</section>
+
+<!-- Slide 8: TTFT 与 TBT -->
+<section>
+    <h2>延迟指标：TTFT 与 TBT</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div class="two-col">
+        <div>
+            <h3>TTFT（Time To First Token）</h3>
+            <ul>
+                <li>从收到请求到输出第一个 token 的时间</li>
+                <li>由 <strong>Prefill 阶段</strong>主导</li>
+                <li>用户感知："多久开始有回复？"</li>
+                <li>交互式应用目标：&lt; 1 秒</li>
+            </ul>
+            <h3 style="margin-top: 0.4em;">TBT（Time Between Tokens）</h3>
+            <ul>
+                <li>连续输出 token 之间的时间间隔</li>
+                <li>由 <strong>Decode 阶段</strong>主导</li>
+                <li>用户感知："文字流出多快？"</li>
+                <li>目标：&lt; 50ms（~20 tokens/s，快于阅读速度）</li>
+            </ul>
+        </div>
+        <div>
+            <h3>端到端延迟</h3>
+            <div class="formula-box">
+                $$T_{\text{total}} = \underbrace{T_{\text{TTFT}}}_{\text{Prefill}} + \underbrace{T_{\text{TBT}} \times n_{\text{output}}}_{\text{Decode}}$$
+            </div>
+            <h3 style="margin-top: 0.4em;">吞吐量 vs 延迟</h3>
+            <div class="highlight-box small">
+                <p><strong>吞吐量</strong>（tokens/s/GPU）：系统效率指标</p>
+                <p><strong>延迟</strong>（TTFT, TBT）：用户体验指标</p>
+                <p style="margin-top: 0.5em;">两者常常<strong>矛盾</strong>：增大批处理提高吞吐量，但可能增加延迟。</p>
+            </div>
+        </div>
+    </div>
+    <aside class="notes">
+        当你用 ChatGPT 看到文字逐渐流出，每个字出现就是一次 Decode 步骤。最初的等待就是 Prefill。
+        端到端延迟公式很简单但很重要：对于长输出，TBT 主导。
+        吞吐量和延迟的矛盾是系统设计的核心 trade-off，Part 2 会讨论如何缓解。
+    </aside>
+</section>
+
+<!-- Slide 9: Part 1 小结 + 交接 -->
+<section>
+    <h2>小结：推理为什么昂贵？</h2>
+    <span class="speaker-tag">Part 1</span>
+    <div style="font-size: 0.95em; text-align: left; max-width: 95%; margin: 0 auto;">
+        <ol>
+            <li style="margin-bottom: 0.4em;">
+                <strong>自回归解码本质串行</strong>：生成 \(T\) 个 token 需要 \(T\) 次前向传播
+            </li>
+            <li style="margin-bottom: 0.4em;">
+                <strong>KV Cache 占用巨量显存</strong>：70B 模型单序列 ~10 GB
+            </li>
+            <li style="margin-bottom: 0.4em;">
+                <strong>Decode 阶段访存瓶颈</strong>：GPU 算力严重闲置，受限于显存带宽
+            </li>
+            <li style="margin-bottom: 0.4em;">
+                <strong>模型越大、序列越长，问题越严重</strong>
+            </li>
+        </ol>
+    </div>
+    <div class="highlight-box" style="margin-top: 0.8em; text-align: center; font-size: 1.05em;">
+        那么，我们能做些什么来优化推理？ →
+    </div>
+    <aside class="notes">
+        快速回顾四个关键点。最后一句话是交接线：
+        "我们现在理解了推理的根本瓶颈。自然的问题是：能做什么来优化？接下来由 [Speaker B] 介绍关键的优化技术。"
+    </aside>
+</section>

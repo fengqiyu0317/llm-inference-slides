@@ -1,0 +1,439 @@
+<!-- ==================== Part 3: Inference-Time Scaling ==================== -->
+
+<!-- Slide 17: Scaling 范式转移 -->
+<section class="divider-slide">
+    <h2>Part 3: Inference-Time Scaling</h2>
+    <p>如果故意花更多推理计算，能得到更好的结果吗？</p>
+    <div style="display: flex; justify-content: center; gap: 3em; margin-top: 2em; font-size: 0.9em;">
+        <div style="text-align: center;">
+            <div style="font-size: 2em;">📐</div>
+            <strong>经典范式</strong><br>
+            <span style="color: #94a3b8;">更大的模型 = 更好的结果</span><br>
+            <span style="color: #94a3b8;">Scaling 训练计算</span>
+        </div>
+        <div style="font-size: 2em; color: #f59e0b; align-self: center;">→</div>
+        <div style="text-align: center;">
+            <div style="font-size: 2em;">🧠</div>
+            <strong>新范式</strong><br>
+            <span style="color: #94a3b8;">更多的推理思考 = 更好的结果</span><br>
+            <span style="color: #94a3b8;">Scaling 推理计算</span>
+        </div>
+    </div>
+    <aside class="notes">
+        Speaker C 开场："之前的所有讨论都在做减法——减少推理计算。我要翻转这个问题：如果我们增加推理计算，会发生什么？"
+        经典 Scaling Laws（Kaplan 2020, Chinchilla 2022）关注训练计算。现在有一个新的维度：推理计算。
+        两者可以互补甚至替代——固定总预算，训练和推理之间存在最优分配。
+    </aside>
+</section>
+
+<!-- Slide 18: Chain-of-Thought -->
+<section>
+    <h2>Chain-of-Thought：中间推理的力量</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>直接回答 vs CoT</h3>
+            <div style="font-size: 0.85em; background: #fef2f2; padding: 0.8em; border-radius: 8px; margin-bottom: 1em;">
+                <strong>直接回答</strong>：<br>
+                Q: "Roger 有 5 个球，买了 2 罐各 3 个。一共几个？"<br>
+                A: "11" ✓ 或 "10" ✗<br>
+                <span style="color: var(--text-muted);">→ 一次前向传播决定答案</span>
+            </div>
+            <div style="font-size: 0.85em; background: #f0fdf4; padding: 0.8em; border-radius: 8px;">
+                <strong>Chain-of-Thought</strong>：<br>
+                A: "Roger 有 5 个球。2 罐 × 3 个 = 6 个。5 + 6 = <strong>11</strong>" ✓<br>
+                <span style="color: var(--text-muted);">→ 每个推理步 = 一次前向传播</span>
+            </div>
+        </div>
+        <div>
+            <h3>为什么有效？</h3>
+            <div class="formula-box">
+                <p>无 CoT：\(\text{answer} = f(\text{input})\)</p>
+                <p style="margin-top: 0.5em;">有 CoT：\(\text{answer} = f_T \circ \cdots \circ f_1(\text{input})\)</p>
+            </div>
+            <ul class="small" style="margin-top: 0.3em;">
+                <li>每个推理 token = 额外的计算"深度"</li>
+                <li><strong>电路复杂性直觉</strong>：某些函数需要深度 \(D\) 才能计算；CoT 通过序列生成提供额外深度</li>
+                <li>Feng et al. (2023)：有 CoT 的 Transformer 可以解决<strong>固定深度 Transformer 证明不可解</strong>的问题</li>
+            </ul>
+            <div class="highlight-box" style="margin-top: 0.2em;">
+                CoT 不引入新信息——只引入更多计算。<br>
+                <strong>更多计算 → 更强的表达能力 → 更好的推理</strong>
+            </div>
+        </div>
+    </div>
+    <p class="ref">Wei et al. (2022) · Feng et al. (2023)</p>
+    <aside class="notes">
+        CoT 是最简单的 inference-time scaling 形式。关键直觉：模型没有获得新信息，只获得了更多计算。
+        类比电路复杂性：一个深度为 1 的电路无法计算 parity，但深度为 log(n) 的可以。
+        CoT 的推理 token 就像给模型额外的"计算层"——通过自回归生成实现的串行深度扩展。
+        用具体例子说明：不用 CoT 时模型要一步到位算出答案，用 CoT 时可以分步骤计算。
+    </aside>
+</section>
+
+<!-- Slide 19: 自一致性 / 多数投票 -->
+<section>
+    <h2>自一致性与多数投票</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>方法</h3>
+            <p class="small">Wang et al. (2023)：独立采样 \(N\) 条 CoT 推理路径，对最终答案取多数投票。</p>
+            <div style="font-size: 0.8em; background: #f1f5f9; padding: 0.6em; border-radius: 8px; margin-top: 0.5em; line-height: 1.4;">
+                采样 1: "... 5 + 6 = <strong>11</strong>" ✓<br>
+                采样 2: "... 5 + 3×2 = <strong>11</strong>" ✓<br>
+                采样 3: "... 5 + 2 + 3 = <strong>10</strong>" ✗<br>
+                采样 4: "... 5 + 6 = <strong>11</strong>" ✓<br>
+                <strong>多数投票 → 11</strong> ✓
+            </div>
+            <p class="small" style="margin-top: 0.3em;">计算开销：\(N\) 倍（\(N\) 次独立推理）</p>
+        </div>
+        <div>
+            <h3>数学保证</h3>
+            <p class="small">设单次采样正确率为 \(p\)，\(N\) 次投票：</p>
+            <div class="formula-box">
+                <strong>Condorcet 陪审团定理</strong>
+                $$P(\text{多数正确}) = \sum_{k=\lceil N/2 \rceil}^{N} \binom{N}{k} p^k(1-p)^{N-k}$$
+            </div>
+            <div class="formula-box" style="margin-top: 0.2em;">
+                <strong>Hoeffding 不等式上界</strong>
+                $$P(\text{多数错误}) \leq \exp\!\big(-2N(p - \tfrac{1}{2})^2\big)$$
+            </div>
+            <div class="highlight-box" style="margin-top: 0.2em;">
+                当 \(p > 0.5\) 时：\(N\) 增大 → 正确率<strong>指数收敛</strong>到 1<br>
+                当 \(p < 0.5\) 时：多数投票反而<strong>更差</strong>！
+            </div>
+        </div>
+    </div>
+    <p class="ref">Wang et al. "Self-Consistency" (2023)</p>
+    <aside class="notes">
+        自一致性是最简单的 inference-time scaling：多采样 + 投票。数学基础是 Condorcet 陪审团定理。
+        关键前提：单次准确率必须 > 50%。如果低于 50%，投票只会放大错误。
+        Hoeffding bound 给了定量保证：错误概率随 N 指数下降。
+        局限性：对于非常难的问题（p << 0.5），投票无济于事——这就是为什么我们需要更强的方法。
+    </aside>
+</section>
+
+<!-- Slide 20: Best-of-N + 奖励模型 -->
+<section>
+    <h2>Best-of-N 采样与奖励模型</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>方法</h3>
+            <ul>
+                <li>生成 \(N\) 个候选解</li>
+                <li>用<strong>奖励模型</strong>（Verifier）选出最佳</li>
+                <li>不需要正确答案是多数——只需被<strong>排名最高</strong></li>
+            </ul>
+            <h3 style="margin-top: 0.4em;">vs 多数投票</h3>
+            <div class="highlight-box small">
+                多数投票：正确答案必须 > 50% 出现率<br>
+                Best-of-N：正确答案只需存在于 N 个候选中 + 被奖励模型识别出来
+            </div>
+        </div>
+        <div>
+            <h3>两种奖励模型</h3>
+            <table>
+                <tr><th></th><th>ORM</th><th>PRM</th></tr>
+                <tr><td>评分对象</td><td>最终答案</td><td>每个推理步</td></tr>
+                <tr><td>训练标注</td><td>仅需答案对错</td><td>需逐步标注</td></tr>
+                <tr><td>错误检测</td><td>只看结果对不对</td><td>能定位<strong>哪一步</strong>出错</td></tr>
+                <tr><td>采样效率</td><td>较低</td><td><strong>较高</strong></td></tr>
+            </table>
+            <div class="formula-box" style="margin-top: 0.3em; font-size: 0.9em;">
+                ORM: \(R(x, y_{\text{final}}) \to \text{score}\)<br>
+                PRM: \(R(x, y_1, \dots, y_k) \to (\text{score}_1, \dots, \text{score}_k)\)
+            </div>
+        </div>
+    </div>
+    <p class="ref">Lightman et al. "Let's Verify Step by Step" (2023)</p>
+    <aside class="notes">
+        Best-of-N 比多数投票更强，因为奖励模型可以在正确答案是少数的情况下识别出它。
+        ORM vs PRM 的区别非常重要：PRM 能逐步评分，所以在推理链的中间就能发现错误，不用等到最后。
+        Lightman et al. 2023 的实验表明 PRM 显著优于 ORM。
+        这就为下一页的树搜索做了铺垫——如果 PRM 能评价中间步骤，我们就可以在中间剪枝。
+    </aside>
+</section>
+
+<!-- Slide 21: 树搜索 + PRM -->
+<section>
+    <h2>树搜索：推理计算的最优分配</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>核心思想</h3>
+            <ul>
+                <li>不再生成 \(N\) 条<strong>完整</strong>解 → 在部分解上做搜索</li>
+                <li>每步生成多个候选 → PRM 评分 → 扩展最优路径</li>
+                <li>类似 A* 搜索：PRM 作为启发函数</li>
+            </ul>
+            <h3 style="margin-top: 0.3em;">为什么比 Best-of-N 高效？</h3>
+            <div class="highlight-box small">
+                <strong>Best-of-N</strong>：一条路走到底，走错了也要走完 → 浪费计算<br>
+                <strong>树搜索</strong>：走错了及早发现并剪枝 → 计算集中在有希望的方向
+            </div>
+        </div>
+        <div>
+            <h3>搜索策略</h3>
+            <div class="diagram-container">
+                <svg viewBox="0 0 460 260" xmlns="http://www.w3.org/2000/svg" style="width:100%; max-height:200px;">
+                    <defs>
+                        <marker id="arrowG" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                            <path d="M0,0 L7,2.5 L0,5" fill="#16a34a"/>
+                        </marker>
+                        <marker id="arrowR" markerWidth="7" markerHeight="5" refX="6" refY="2.5" orient="auto">
+                            <path d="M0,0 L7,2.5 L0,5" fill="#cbd5e1"/>
+                        </marker>
+                    </defs>
+                    <!-- Level 0: Root -->
+                    <rect x="190" y="10" width="80" height="30" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1.5"/>
+                    <text x="230" y="30" text-anchor="middle" font-size="11" fill="#334155">Input</text>
+                    <!-- Level 1 连线 -->
+                    <line x1="210" y1="40" x2="120" y2="80" stroke="#16a34a" stroke-width="2" marker-end="url(#arrowG)"/>
+                    <line x1="250" y1="40" x2="340" y2="80" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowR)"/>
+                    <!-- Level 1: Node A -->
+                    <rect x="70" y="80" width="100" height="34" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+                    <text x="108" y="100" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">A</text>
+                    <rect x="130" y="84" width="34" height="18" rx="9" fill="#16a34a"/>
+                    <text x="147" y="97" text-anchor="middle" font-size="10" fill="white" font-weight="600">0.9</text>
+                    <!-- Level 1: Node B (pruned) -->
+                    <rect x="290" y="80" width="100" height="34" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4,3"/>
+                    <text x="328" y="100" text-anchor="middle" font-size="12" fill="#94a3b8">B</text>
+                    <rect x="350" y="84" width="34" height="18" rx="9" fill="#94a3b8"/>
+                    <text x="367" y="97" text-anchor="middle" font-size="10" fill="white">0.3</text>
+                    <line x1="300" y1="84" x2="380" y2="110" stroke="#dc2626" stroke-width="2" opacity="0.5"/>
+                    <line x1="380" y1="84" x2="300" y2="110" stroke="#dc2626" stroke-width="2" opacity="0.5"/>
+                    <!-- Level 2 连线 -->
+                    <line x1="100" y1="114" x2="60" y2="158" stroke="#16a34a" stroke-width="2" marker-end="url(#arrowG)"/>
+                    <line x1="140" y1="114" x2="200" y2="158" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowR)"/>
+                    <!-- Level 2: Node C -->
+                    <rect x="10" y="158" width="100" height="34" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+                    <text x="48" y="178" text-anchor="middle" font-size="12" font-weight="600" fill="#166534">C</text>
+                    <rect x="70" y="162" width="34" height="18" rx="9" fill="#16a34a"/>
+                    <text x="87" y="175" text-anchor="middle" font-size="10" fill="white" font-weight="600">0.8</text>
+                    <!-- Level 2: Node D (pruned) -->
+                    <rect x="150" y="158" width="100" height="34" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4,3"/>
+                    <text x="188" y="178" text-anchor="middle" font-size="12" fill="#94a3b8">D</text>
+                    <rect x="210" y="162" width="34" height="18" rx="9" fill="#94a3b8"/>
+                    <text x="227" y="175" text-anchor="middle" font-size="10" fill="white">0.5</text>
+                    <line x1="160" y1="162" x2="240" y2="188" stroke="#dc2626" stroke-width="2" opacity="0.5"/>
+                    <line x1="240" y1="162" x2="160" y2="188" stroke="#dc2626" stroke-width="2" opacity="0.5"/>
+                    <!-- Level 3 连线 -->
+                    <line x1="60" y1="192" x2="60" y2="218" stroke="#16a34a" stroke-width="2" marker-end="url(#arrowG)"/>
+                    <!-- Level 3: Node E (answer) -->
+                    <rect x="10" y="218" width="100" height="34" rx="8" fill="#2563eb" stroke="#1e40af" stroke-width="2"/>
+                    <text x="42" y="239" text-anchor="middle" font-size="12" font-weight="700" fill="white">E ★</text>
+                    <rect x="70" y="222" width="38" height="18" rx="9" fill="#fbbf24"/>
+                    <text x="89" y="235" text-anchor="middle" font-size="10" fill="#1e293b" font-weight="700">0.95</text>
+                    <!-- 图例 -->
+                    <line x1="300" y1="168" x2="330" y2="168" stroke="#16a34a" stroke-width="2"/>
+                    <text x="335" y="172" font-size="10" fill="#334155">扩展</text>
+                    <line x1="300" y1="188" x2="330" y2="188" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="4,3"/>
+                    <text x="335" y="192" font-size="10" fill="#334155">剪枝</text>
+                    <rect x="298" y="200" width="14" height="14" rx="7" fill="#16a34a"/>
+                    <text x="320" y="212" font-size="10" fill="#334155">PRM 分数</text>
+                </svg>
+            </div>
+            <h3 style="margin-top: 0.3em;">Snell et al. (2024) 核心结果</h3>
+            <div class="highlight-box">
+                小模型 + 最优推理计算分配<br>
+                > <strong>14× 大模型</strong>（相同 FLOPs）
+            </div>
+        </div>
+    </div>
+    <p class="ref">Snell et al. "Scaling LLM Test-Time Compute Optimally" (2024)</p>
+    <aside class="notes">
+        树搜索是推理时计算分配的最优形式。类比 A* 搜索：PRM 是启发函数，帮助我们优先探索最有希望的推理路径。
+        Snell et al. 2024 是这个领域的核心论文。他们的发现：
+        1. 计算的最优分配取决于问题难度
+        2. 简单问题：修改单条解（self-refinement）更好
+        3. 困难问题：树搜索 + PRM 更有效
+        4. 最优分配下，小模型可以匹配 14 倍大的模型
+    </aside>
+</section>
+
+<!-- Slide 22: 计算最优前沿 -->
+<section>
+    <h2>计算最优前沿：训练 vs 推理</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>核心问题</h3>
+            <p class="small">给定总计算预算 \(C\)，如何在训练和推理之间最优分配？</p>
+            <div class="formula-box">
+                $$\max_{C_{\text{train}} + C_{\text{infer}} = C} \text{Quality}\!\big(\text{Model}(C_{\text{train}}),\; \text{Strategy}(C_{\text{infer}})\big)$$
+            </div>
+            <h3 style="margin-top: 0.4em;">关键发现</h3>
+            <ul class="small">
+                <li><strong>简单问题</strong>：大模型 + 少量推理计算更优</li>
+                <li><strong>困难问题</strong>：小模型 + 大量推理计算更优</li>
+                <li>交叉点取决于 PRM 的质量</li>
+            </ul>
+        </div>
+        <div>
+            <h3>两个 Scaling 维度</h3>
+            <div class="diagram-container">
+                <svg viewBox="0 0 420 270" xmlns="http://www.w3.org/2000/svg" style="width:100%;">
+                    <!-- 坐标轴 -->
+                    <line x1="60" y1="240" x2="400" y2="240" stroke="#1e293b" stroke-width="1.5"/>
+                    <line x1="60" y1="240" x2="60" y2="20" stroke="#1e293b" stroke-width="1.5"/>
+                    <polygon points="400,240 394,236 394,244" fill="#1e293b"/>
+                    <polygon points="60,20 56,26 64,26" fill="#1e293b"/>
+                    <!-- 轴标签 -->
+                    <text x="230" y="262" text-anchor="middle" font-size="11" fill="#64748b">训练计算 (Train Compute) →</text>
+                    <text x="20" y="130" text-anchor="middle" font-size="11" fill="#64748b" transform="rotate(-90,20,130)">推理计算 (Test Compute) →</text>
+                    <!-- 等性能曲线 -->
+                    <path d="M80,40 Q140,60 180,100 Q220,160 340,220" stroke="#94a3b8" stroke-width="1.2" fill="none" stroke-dasharray="6,3"/>
+                    <path d="M80,80 Q130,100 170,140 Q210,190 300,230" stroke="#94a3b8" stroke-width="1.2" fill="none" stroke-dasharray="6,3"/>
+                    <path d="M80,120 Q120,140 155,175 Q190,215 250,235" stroke="#94a3b8" stroke-width="1.2" fill="none" stroke-dasharray="6,3"/>
+                    <text x="345" y="210" font-size="9" fill="#94a3b8" transform="rotate(-20,345,210)">等性能曲线</text>
+                    <!-- 经典范式区域 -->
+                    <rect x="280" y="190" width="100" height="40" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+                    <text x="330" y="207" text-anchor="middle" font-size="10" font-weight="600" fill="#1e40af">经典范式</text>
+                    <text x="330" y="222" text-anchor="middle" font-size="9" fill="#2563eb">更大模型</text>
+                    <!-- 新范式区域 -->
+                    <rect x="80" y="40" width="100" height="40" rx="8" fill="#fef3c7" stroke="#f59e0b" stroke-width="1.5"/>
+                    <text x="130" y="57" text-anchor="middle" font-size="10" font-weight="600" fill="#92400e">新范式</text>
+                    <text x="130" y="72" text-anchor="middle" font-size="9" fill="#f59e0b">更多推理</text>
+                    <!-- 最优点 -->
+                    <circle cx="195" cy="130" r="6" fill="#16a34a" stroke="#166534" stroke-width="1.5"/>
+                    <text x="210" y="125" font-size="9" font-weight="600" fill="#166534">最优分配</text>
+                    <text x="210" y="138" font-size="8" fill="#16a34a">(取决于问题难度)</text>
+                    <!-- 方向箭头 -->
+                    <path d="M280,210 Q240,180 200,140" stroke="#2563eb" stroke-width="1.2" fill="none" stroke-dasharray="3,2" marker-end="url(#arwSvg)"/>
+                    <defs>
+                        <marker id="arwSvg" markerWidth="6" markerHeight="4" refX="5" refY="2" orient="auto">
+                            <path d="M0,0 L6,2 L0,4" fill="#2563eb"/>
+                        </marker>
+                    </defs>
+                </svg>
+            </div>
+        </div>
+    </div>
+    <aside class="notes">
+        这是理论核心：训练计算和推理计算是可以互换的两个维度。
+        思想实验：你有 100 美元计算预算，训一个大模型做简单推理？还是训一个小模型做大量推理思考？
+        Snell et al. 的回答：取决于问题的难度分布。如果你的应用场景多是困难推理问题（数学、编程），推理计算可能比模型大小更重要。
+    </aside>
+</section>
+
+<!-- Slide 23: 前沿模型 -->
+<section>
+    <h2>前沿模型：o1/o3 与 DeepSeek R1</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>OpenAI o1/o3 (2024-2025)</h3>
+            <ul>
+                <li>生成可见回答前，先产生隐藏的 <strong>"thinking tokens"</strong></li>
+                <li>用 RL 训练模型学会<strong>何时</strong>思考、<strong>如何</strong>思考</li>
+                <li>不是提示工程的 CoT——是模型自主习得的推理能力</li>
+                <li>数学、编程、科学推理显著提升</li>
+            </ul>
+        </div>
+        <div>
+            <h3>DeepSeek R1 (2025)</h3>
+            <ul>
+                <li><strong>GRPO</strong>（Group Relative Policy Optimization）：</li>
+            </ul>
+            <div class="formula-box" style="font-size: 0.8em; padding: 0.3em 0.6em; margin: 0.2em 0;">
+                采样一组回答 \(\{o_i\}_{i=1}^G\)，组内相对优势：
+                $$A_i = \frac{r_i - \mu}{\sigma}, \quad \mu = \text{mean}(r), \; \sigma = \text{std}(r)$$
+            </div>
+            <ul>
+                <li><strong>RLVR</strong>：用可验证奖励（如数学答案正确性）做 RL——无需人工标注</li>
+                <li><strong>涌现行为</strong>：R1-Zero（纯 RL，无 SFT）自发学会了自我验证、长链推理、探索多种解法</li>
+            </ul>
+        </div>
+    </div>
+    <div class="highlight-box" style="margin-top: 0.3em; text-align: center;">
+        DeepSeek R1 的关键启示：推理能力可以<strong>纯粹从 RL 中涌现</strong>——模型学会思考，因为思考能获得更高奖励。
+    </div>
+    <p class="ref">OpenAI (2024) · DeepSeek-AI (2025)</p>
+    <aside class="notes">
+        o1 和 R1 是 inference-time scaling 的最前沿实践。
+        o1 的 thinking tokens 是隐藏的——用户看不到推理过程，只看到结果。这和之前 prompt-based CoT 的根本区别是：模型通过 RL 自主学会了思考策略。
+        DeepSeek R1 特别重要因为它是开源的，而且展示了一个惊人的结果：纯 RL（不用任何人类推理示范）就能让模型涌现出推理能力。
+        GRPO 的优势：不需要单独训练 critic 模型，用组内相对排名作为优势估计。
+        RLVR：数学题的对错可以自动验证，不需要人工标注过程级别的奖励。
+    </aside>
+</section>
+
+<!-- Slide 24: 理论视角与开放问题 -->
+<section>
+    <h2>理论视角与开放问题</h2>
+    <span class="speaker-tag">Part 3</span>
+    <div class="two-col">
+        <div>
+            <h3>何时推理 Scaling > 训练 Scaling？</h3>
+            <ul>
+                <li>问题<strong>足够难</strong>（单次准确率低）</li>
+                <li><strong>好的验证器</strong>（PRM）可用</li>
+                <li>问题难度分布是<strong>重尾的</strong>（很多难题）</li>
+                <li>推理策略能<strong>端到端学习</strong>（如 o1, R1）</li>
+            </ul>
+        </div>
+        <div>
+            <h3>开放问题</h3>
+            <ol>
+                <li>推理计算的 Scaling Law 是什么形式？<br><span class="small">（幂律？对数线性？）</span></li>
+                <li>如何端到端学习最优推理策略？<br><span class="small">（o1/R1 是初步探索）</span></li>
+                <li>推理 Scaling 的<strong>根本极限</strong>在哪？<br><span class="small">（是否有推理版的 Chinchilla？）</span></li>
+                <li>如何构建更好的过程奖励模型？<br><span class="small">（当前 PRM 训练成本高昂）</span></li>
+            </ol>
+        </div>
+    </div>
+    <div class="highlight-box" style="margin-top: 0.3em; text-align: center;">
+        Inference-Time Scaling 是当前 ML 领域最活跃的研究方向之一。
+    </div>
+    <aside class="notes">
+        这些是真正的开放研究问题。如果有同学对 ML 研究感兴趣，这个方向机会很多。
+        特别是第 3 个问题：我们知道训练 Scaling 有 Chinchilla optimal（给定计算预算的最优模型大小和数据量），但推理 Scaling 还没有对应的理论。
+        PRM 的训练是一个瓶颈：逐步标注推理过程非常昂贵。能否自动生成过程级奖励？R1 的 RLVR 是一个方向。
+    </aside>
+</section>
+
+<!-- Slide 25: 总结 -->
+<section>
+    <h2>总结：推理的三个视角</h2>
+    <div style="max-width: 95%; margin: 0 auto;">
+        <table style="font-size: 0.9em;">
+            <tr>
+                <th style="width: 25%;">Part</th>
+                <th style="width: 35%;">核心问题</th>
+                <th style="width: 40%;">关键技术</th>
+            </tr>
+            <tr>
+                <td><strong>1. 理解推理</strong></td>
+                <td>推理为什么昂贵？</td>
+                <td>自回归 · KV Cache · Prefill/Decode · Roofline</td>
+            </tr>
+            <tr>
+                <td><strong>2. 优化推理</strong></td>
+                <td>如何减少每个 token 的代价？</td>
+                <td>量化 · 推测解码 · Continuous Batching · PagedAttention</td>
+            </tr>
+            <tr>
+                <td><strong>3. Scaling 推理</strong></td>
+                <td>更多推理计算 = 更好的结果？</td>
+                <td>CoT · 自一致性 · Best-of-N · 树搜索+PRM · o1/R1</td>
+            </tr>
+        </table>
+        <div class="highlight-box" style="margin-top: 0.8em; text-align: center; font-size: 1.05em;">
+            LLM 推理的未来不仅是<strong>更快</strong>——更是<strong>更智能</strong>。<br>
+            知道什么时候"快思考"（System 1），什么时候"慢思考"（System 2）。
+        </div>
+        <p class="small" style="text-align: center; margin-top: 0.3em; color: var(--text-muted);">
+            — Daniel Kahneman,《思考，快与慢》
+        </p>
+    </div>
+    <aside class="notes">
+        用 Kahneman 的 System 1 / System 2 作为收尾类比：
+        System 1 = 快速、直觉的推理（标准 Decode，优化后的推理）
+        System 2 = 慢速、深思熟虑的推理（Inference-Time Scaling，CoT，搜索）
+        LLM 正在学会在两种模式之间切换——简单问题快速回答，难题深入思考。
+        这是一个令人兴奋的方向，也是 AI 走向更通用智能的重要一步。
+        感谢大家的聆听！
+    </aside>
+</section>
