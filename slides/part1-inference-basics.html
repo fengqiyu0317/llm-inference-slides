@@ -52,6 +52,10 @@
             </p>
         </div>
     </div>
+    <img src="assets/rnn-vs-attention-concept.jpg"
+         class="slide-figure"
+         alt="RNN 顺序隐状态链 vs Transformer 全局注意力对比"
+         style="max-height: 155px; margin-top: 0.4em;">
     <aside class="notes">
         这页帮助没学过 Transformer 的同学建立直觉。RNN 有两个根本问题：顺序计算无法并行，以及信息瓶颈。
         Attention 机制通过让每个位置直接看到所有其他位置来解决这些问题。
@@ -282,6 +286,10 @@
         <tr><td>批维度</td><td>\(n_{\text{prompt}}\)（大）</td><td>1（单 token）</td></tr>
         <tr><td>延迟指标</td><td>TTFT</td><td>TBT</td></tr>
     </table>
+    <img src="assets/prefill-decode-gpu-utilization.png"
+         class="slide-figure"
+         alt="Prefill GPU 满载 vs Decode GPU 大部分空闲示意"
+         style="max-height: 150px; margin-top: 0.4em;">
     <aside class="notes">
         这是 Part 1 最关键的系统洞察。Prefill 类似训练——大矩阵乘，GPU 利用率高。
         Decode 则完全不同——每次只处理一个 token 的向量，必须加载全部模型权重但只做一次乘法。
